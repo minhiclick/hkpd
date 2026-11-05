@@ -19,7 +19,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
-/* Layout: bàn trọng tài — dải tiêu đề, lưới 8 bảng đấu (Nam/Nữ × Khối 6–9), khu làm việc một cột */
+/* Layout: bàn trọng tài — dải tiêu đề, lưới bảng đấu (Nam/Nữ × nhóm khối theo cấp học), khu làm việc một cột */
 :root{
   --paper:#edf1ef; --surface:#ffffff; --surface-2:#f6f8f7; --ink:#15201b; --muted:#56665f; --line:#d2dbd7;
   --accent:#23634a; --accent-ink:#ffffff; --accent-soft:#dbeae2;
@@ -77,8 +77,11 @@ button{cursor:pointer}
 .banner{background:var(--warn-bg);color:var(--warn-ink);border-radius:10px;padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px}
 .banner p{margin:0;flex:1;min-width:220px}
 
-/* group grid */
-.groups{display:grid;grid-template-columns:52px repeat(4,minmax(0,1fr));gap:8px;align-items:stretch}
+/* group grid: mỗi giới tính một hàng, số bảng theo cấp học (2, 4 hoặc 6 bảng) */
+.groups{display:grid;gap:8px}
+.grow{display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px;align-items:stretch}
+.gchips{display:grid;grid-template-columns:repeat(var(--gn,4),minmax(0,1fr));gap:8px}
+@media (max-width:760px){.gchips{grid-template-columns:repeat(min(var(--gn,4),3),minmax(0,1fr))}}
 .groups .rowlab{display:flex;align-items:center;font-weight:700;font-size:14px;color:var(--muted)}
 .chip{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:8px 10px;text-align:left;display:grid;gap:2px;min-width:0}
 .chip:hover{border-color:var(--accent)}
@@ -93,6 +96,9 @@ button{cursor:pointer}
 .nav-row{display:flex;gap:8px;flex-wrap:wrap}
 .navbtn{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font-weight:600;font-size:14px}
 .navbtn[aria-current="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.lvl{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--muted);margin-left:auto;min-width:0}
+.lvl select{border:1px solid var(--line);border-radius:999px;padding:7px 12px;background:var(--surface);color:var(--ink);font-weight:600;font-size:14px;max-width:100%;min-width:0}
+@media (max-width:520px){.lvl{margin-left:0;width:100%}.lvl select{flex:1}}
 
 /* panels */
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px;display:grid;gap:14px;min-width:0}
@@ -185,7 +191,7 @@ details.settings summary{cursor:pointer;font-weight:700}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:60;background:var(--ink);color:var(--paper);
   padding:10px 16px;border-radius:10px;font-size:14px;max-width:min(560px,calc(100vw - 32px));box-shadow:var(--shadow)}
 @media (max-width:520px){
-  .groups{grid-template-columns:38px repeat(4,minmax(0,1fr));gap:6px}
+  .grow{grid-template-columns:38px minmax(0,1fr);gap:6px}.gchips{gap:6px}
   .chip{padding:7px 7px}.chip .k{font-size:14px}
   .panel{padding:14px}
 }
@@ -208,6 +214,12 @@ details.settings summary{cursor:pointer;font-weight:700}
 
   <nav class="nav-row" aria-label="Chế độ">
     <button class="navbtn" data-act="goPlayers" id="navPlayers">Danh sách vận động viên</button>
+    <label class="lvl">Cấp học
+      <select id="sLevel" aria-label="Cấp học – chia bảng thi đấu">
+        <option value="THCS">THCS – Khối 6, 7, 8, 9</option>
+        <option value="TH">Tiểu học – Khối 2–3, Khối 4–5</option>
+        <option value="LC">Liên cấp – Khối 2–3, 4–5, 6, 7, 8, 9</option>
+      </select></label>
   </nav>
   <div class="groups" id="groups" aria-label="Các bảng đấu"></div>
 
@@ -269,9 +281,21 @@ details.settings summary{cursor:pointer;font-weight:700}
 (function(){
 'use strict';
 const KEY='hkpd-covua-v1';
-const GRADES=[6,7,8,9], SEXES=['Nam','Nữ'];
-const GKEYS=[]; SEXES.forEach(s=>GRADES.forEach(g=>GKEYS.push(s+'-'+g)));
-const gname=k=>{const [s,g]=k.split('-');return s+' – Khối '+g};
+/* Nhóm thi đấu (bảng) theo khối: tiểu học ghép Khối 2–3 và Khối 4–5; THCS mỗi khối một bảng */
+const BRACKETS={'23':[2,3],'45':[4,5],'6':[6],'7':[7],'8':[8],'9':[9]};
+const blabel=b=>'Khối '+BRACKETS[b].join('–');
+/* Cấp học: THCS, Tiểu học, Liên cấp TH&THCS */
+const LEVELS={
+  THCS:{label:'Trung học cơ sở (Khối 6, 7, 8, 9)',short:'khối 6, 7, 8, 9',br:['6','7','8','9'],eg:'6/1'},
+  TH:{label:'Tiểu học (Khối 2–3, Khối 4–5)',short:'khối 2, 3, 4, 5',br:['23','45'],eg:'3/1'},
+  LC:{label:'Liên cấp TH & THCS (Khối 2–3, 4–5, 6, 7, 8, 9)',short:'khối 2 đến 9',br:['23','45','6','7','8','9'],eg:'4/2'}};
+const SEXES=['Nam','Nữ'];
+let BRS=[], GRADES=[], GKEYS=[];
+function setLevel(lv){const L=LEVELS[lv]||LEVELS.THCS;BRS=L.br.slice();GRADES=BRS.flatMap(b=>BRACKETS[b]);GKEYS=[];SEXES.forEach(s=>BRS.forEach(b=>GKEYS.push(s+'-'+b)))}
+const lvl=()=>LEVELS[S&&S.info&&S.info.level]||LEVELS.THCS;
+const bracketOf=g=>BRS.find(b=>BRACKETS[b].includes(g))||null;
+const gname=k=>{const [s,b]=k.split('-');return s+' – '+blabel(b)};
+setLevel('THCS');
 const cryptoRnd=()=>{const a=new Uint32Array(1);crypto.getRandomValues(a);return a[0]/4294967296};
 let rnd=cryptoRnd;
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -281,12 +305,13 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const deacc=s=>String(s??'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D').toLowerCase().trim();
 const pad=n=>String(n).padStart(2,'0');
 const fmt=x=>{const f=Math.floor(x),h=x-f>0;return (f||!h?String(f):'')+(h?'½':'')};
-function gradeOf(cls){const m=String(cls??'').match(/[6-9]/);return m?+m[0]:null}
+// Khối = chữ số đầu tiên (1–9) trong tên lớp: 6/1, 7A2, 3.1, Lớp 4B…
+function gradeOf(cls){const m=String(cls??'').match(/[1-9]/);if(!m)return null;const g=+m[0];return GRADES.includes(g)?g:null}
 function sexOf(v,def){const s=deacc(v);if(!s)return def;if(s.startsWith('nu')||s==='x'||s==='f')return 'Nữ';if(s.startsWith('nam')||s==='m')return 'Nam';return def}
-const keyOf=p=>{const g=gradeOf(p.cls);return g?p.sex+'-'+g:null};
+const keyOf=p=>{const g=gradeOf(p.cls),b=g&&bracketOf(g);return b?p.sex+'-'+b:null};
 
 /* ---------- state ---------- */
-function blank(){return{v:1,sample:false,info:{name:'Hội khỏe Phù Đổng cấp trường – Môn Cờ vua',unit:'Trường THCS Phú Bài',year:'2026 – 2027',rounds:7,tb:'A',avoidClass:true},players:[],groups:{}}}
+function blank(lv){return{v:1,sample:false,info:{name:'Hội khỏe Phù Đổng cấp trường – Môn Cờ vua',unit:'Trường THCS Phú Bài',year:'2026 – 2027',rounds:7,tb:'A',avoidClass:true,level:lv||'THCS'},players:[],groups:{}}}
 let S=null;
 let ui={view:'group',gkey:'Nam-6',tab:'r',ri:null};
 const G=k=>S.groups[k]||(S.groups[k]={seed:{},rounds:[],coin:0});
@@ -405,7 +430,7 @@ function pairNext(k){
 }
 
 /* ---------- sample data ---------- */
-function makeSample(){
+function makeSample(info){
   const old=rnd;rnd=mulberry32(20261120);
   const ho=['Nguyễn','Trần','Lê','Phạm','Hoàng','Phan','Võ','Đặng','Bùi','Hồ','Ngô','Dương','Huỳnh','Trương'];
   const dNam=['Văn','Minh','Quang','Đức','Hữu','Gia','Anh','Nhật','Bảo','Thành'];
@@ -413,26 +438,43 @@ function makeSample(){
   const dNu=['Thị','Ngọc','Khánh','Bảo','Minh','Thu','Gia','Hoài','Thanh','Mai'];
   const tNu=['An','Châu','Hà','Linh','Ngân','Nhi','Thảo','Trâm','Uyên','Vy','My','Hân','Quỳnh','Trang','Yến','Diệp'];
   const pick=a=>a[Math.floor(rnd()*a.length)];
-  S=blank();S.sample=true;
-  const nCls={6:10,7:9,8:9,9:10}; // mỗi lớp 2 nam, 2 nữ
-  for(const k of GKEYS){const [sex,gr]=k.split('-'),used=new Set();
-    for(let c=1;c<=nCls[gr];c++)for(let j=0;j<2;j++){let nm;
+  S=blank();if(info)S.info=info;S.sample=true;setLevel(S.info.level);
+  // mỗi lớp 2 nam, 2 nữ; THCS giữ quy mô 38 lớp, tiểu học mỗi khối 3 lớp
+  const nCls={2:3,3:3,4:3,5:3,6:10,7:9,8:9,9:10};
+  const first=GKEYS[0],second='Nữ-'+BRS[0];
+  for(const k of GKEYS){const [sex,b]=k.split('-'),used=new Set();
+    for(const gr of BRACKETS[b])for(let c=1;c<=nCls[gr];c++)for(let j=0;j<2;j++){let nm;
       do{nm=sex==='Nam'?pick(ho)+' '+pick(dNam)+' '+pick(tNam):pick(ho)+' '+pick(dNu)+' '+pick(tNu)}while(used.has(nm));
       used.add(nm);S.players.push({id:uid(),name:nm,cls:gr+'/'+c,sex})}}
-  applyDraw('Nam-6',shuffle(playersIn('Nam-6').map(p=>p.id)));
-  for(let r=0;r<2;r++){pairNext('Nam-6');G('Nam-6').rounds[r].pairs.forEach(x=>{const t=rnd();x.r=t<.42?'1-0':t<.64?'½-½':'0-1'})}
-  pairNext('Nam-6');
-  applyDraw('Nữ-6',shuffle(playersIn('Nữ-6').map(p=>p.id)));
+  applyDraw(first,shuffle(playersIn(first).map(p=>p.id)));
+  for(let r=0;r<2;r++){pairNext(first);G(first).rounds[r].pairs.forEach(x=>{const t=rnd();x.r=t<.42?'1-0':t<.64?'½-½':'0-1'})}
+  pairNext(first);
+  applyDraw(second,shuffle(playersIn(second).map(p=>p.id)));
   rnd=old;
 }
 
 /* ---------- persistence ---------- */
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S));localStorage.setItem(KEY+'-ui',JSON.stringify(ui))}catch(e){}}
 function load(){
-  try{const s=JSON.parse(localStorage.getItem(KEY)||'null');if(s&&s.v===1&&Array.isArray(s.players)&&!s.sample)S=s}catch(e){}
-  if(!S)makeSample();
+  let sampleLv=null;
+  try{const s=JSON.parse(localStorage.getItem(KEY)||'null');
+    if(s&&s.v===1&&Array.isArray(s.players)){if(!s.sample)S=s;else if(s.info)sampleLv=s.info}}catch(e){}
+  if(S){if(!LEVELS[S.info.level])S.info.level='THCS';setLevel(S.info.level)} // dữ liệu cũ (chưa có cấp học) = THCS
+  else makeSample(sampleLv&&LEVELS[sampleLv.level]?sampleLv:null);
   try{const u=JSON.parse(localStorage.getItem(KEY+'-ui')||'null');if(u&&typeof u==='object')ui=Object.assign(ui,u)}catch(e){}
-  if(!GKEYS.includes(ui.gkey))ui.gkey='Nam-6';
+  if(!GKEYS.includes(ui.gkey))ui.gkey=GKEYS[0];
+}
+/* Đổi cấp học: chỉ cho đổi khi mọi VĐV đã nhập đều thuộc khối của cấp mới */
+function changeLevel(lv){
+  if(!LEVELS[lv]||lv===S.info.level)return true;
+  if(S.sample){const info=Object.assign({},S.info,{level:lv});makeSample(info)}
+  else{
+    const keep=LEVELS[lv].br.flatMap(b=>BRACKETS[b]),bad=S.players.filter(p=>{const m=String(p.cls??'').match(/[1-9]/);return !m||!keep.includes(+m[0])});
+    if(bad.length){toast('Không đổi được: còn '+bad.length+' VĐV không thuộc '+LEVELS[lv].short+' (ví dụ '+bad.slice(0,2).map(p=>p.name+' – '+p.cls).join(', ')+'). Xóa các VĐV này trước.',7000);return false}
+    S.info.level=lv;setLevel(lv);
+  }
+  if(!GKEYS.includes(ui.gkey)){ui.gkey=GKEYS[0];ui.tab='draw';ui.ri=null}
+  save();render();toast('Đã chuyển sang cấp '+LEVELS[lv].label+'.');return true;
 }
 
 /* ---------- import ---------- */
@@ -471,7 +513,7 @@ function addPlayers(list){
   let msg='Đã thêm '+res.added+' VĐV.'+note;
   if(res.dup)msg+=' Bỏ qua '+res.dup+' tên trùng.';
   if(res.blocked)msg+=' '+res.blocked+' VĐV không thêm được vì bảng đã bắt đầu thi đấu.';
-  if(res.nog.length)msg+=' Không xác định được khối của: '+res.nog.slice(0,4).join(', ')+(res.nog.length>4?'…':'')+' (cột Lớp cần có số 6–9).';
+  if(res.nog.length)msg+=' Không xác định được khối của: '+res.nog.slice(0,4).join(', ')+(res.nog.length>4?'…':'')+' (cột Lớp cần thuộc '+lvl().short+'; chọn lại ô “Cấp học” nếu cần).';
   toast(msg,6000);
 }
 
@@ -516,7 +558,7 @@ function exportXlsx(){
   for(const k of GKEYS){if(!playersIn(k).length)continue;
     const ws=XLSX.utils.aoa_to_sheet(groupAOA(k));
     ws['!cols']=[{wch:7},{wch:7},{wch:30},{wch:10},{wch:7},{wch:30},{wch:9},{wch:9},{wch:9},{wch:9},{wch:9},{wch:9},{wch:10},{wch:10}];
-    XLSX.utils.book_append_sheet(wb,ws,k.replace('-',' K'));n++}
+    const [sx,b]=k.split('-');XLSX.utils.book_append_sheet(wb,ws,sx+' K'+BRACKETS[b].join('-'));n++}
   if(!n){toast('Chưa có vận động viên nào để xuất.');return}
   const buf=XLSX.write(wb,{bookType:'xlsx',type:'array'});
   offer('Boc_tham_Co_vua_HKPD.xlsx',buf);
@@ -586,28 +628,29 @@ function render(){
   document.getElementById('banner').innerHTML=S.sample?'<div class="banner"><p><b>Đang hiển thị dữ liệu mẫu</b> với tên học sinh giả định để bạn xem thử cách hoạt động. Khi nhập danh sách thật, dữ liệu mẫu sẽ tự xóa.</p><button class="btn sm" data-act="clearSample">Xóa dữ liệu mẫu</button><button class="btn sm primary" data-act="goPlayers">Nhập danh sách thật</button></div>':'';
   document.getElementById('navPlayers').setAttribute('aria-current',ui.view==='players');
   let gh='';
-  SEXES.forEach(s=>{gh+='<div class="rowlab">'+s+'</div>';
-    GRADES.forEach(gr=>{const k=s+'-'+gr,st=status(k),n=playersIn(k).length;
-      gh+='<button class="chip" data-act="goGroup" data-k="'+k+'" aria-current="'+(ui.view==='group'&&ui.gkey===k)+'"><span class="k">Khối '+gr+'</span><span class="n">'+n+' VĐV</span><span class="pill '+st.c+'">'+st.t+'</span></button>'})});
-  document.getElementById('groups').innerHTML=gh;
+  SEXES.forEach(s=>{gh+='<div class="grow"><div class="rowlab">'+s+'</div><div class="gchips">';
+    BRS.forEach(b=>{const k=s+'-'+b,st=status(k),n=playersIn(k).length;
+      gh+='<button class="chip" data-act="goGroup" data-k="'+k+'" aria-current="'+(ui.view==='group'&&ui.gkey===k)+'"><span class="k">'+blabel(b)+'</span><span class="n">'+n+' VĐV</span><span class="pill '+st.c+'">'+st.t+'</span></button>'});
+    gh+='</div></div>'});
+  const gEl=document.getElementById('groups');gEl.innerHTML=gh;gEl.style.setProperty('--gn',BRS.length);
   document.getElementById('main').innerHTML=ui.view==='players'?viewPlayers():viewGroup(ui.gkey);
   const s=document.getElementById.bind(document);
   if(document.activeElement!==s('sName'))s('sName').value=S.info.name;
   if(document.activeElement!==s('sUnit'))s('sUnit').value=S.info.unit;
   if(document.activeElement!==s('sYear'))s('sYear').value=S.info.year;
   if(document.activeElement!==s('sRounds'))s('sRounds').value=S.info.rounds;
-  s('sTb').value=S.info.tb;s('sAvoid').checked=!!S.info.avoidClass;
+  s('sTb').value=S.info.tb;s('sAvoid').checked=!!S.info.avoidClass;s('sLevel').value=S.info.level||'THCS';
 }
 
 function viewPlayers(){
-  let h='<section class="panel"><div class="panel-head"><div><h2>Danh sách vận động viên</h2><div class="sub">'+S.players.length+' VĐV · tự chia vào 8 bảng theo giới tính và khối lớp</div></div></div>';
+  let h='<section class="panel"><div class="panel-head"><div><h2>Danh sách vận động viên</h2><div class="sub">'+S.players.length+' VĐV · tự chia vào '+GKEYS.length+' bảng theo giới tính và khối lớp ('+esc(lvl().label)+')</div></div></div>';
   h+='<div class="split"><div class="field">Dán danh sách từ Excel (mỗi dòng: Họ tên · Lớp · Giới tính)'+
-     '<textarea id="pasteBox" placeholder="Nguyễn Văn An&#9;6/1&#9;Nam&#10;Trần Thị Bình&#9;7/3&#9;Nữ"></textarea>'+
+     '<textarea id="pasteBox" placeholder="Nguyễn Văn An&#9;'+GRADES[0]+'/1&#9;Nam&#10;Trần Thị Bình&#9;'+GRADES[GRADES.length-1]+'/3&#9;Nữ"></textarea>'+
      '<div class="row"><label class="field">Giới tính khi không có cột này<select id="defSex"><option>Nam</option><option>Nữ</option></select></label>'+
      '<button class="btn primary" data-act="addPaste">Thêm vào danh sách</button></div></div>'+
      '<div style="display:grid;gap:12px;align-content:start"><div class="field">Hoặc nhập từ tệp Excel<label class="btn" for="xlsFile" style="text-align:center">Chọn tệp .xlsx / .xls / .csv</label><input type="file" id="xlsFile" accept=".xlsx,.xls,.csv" hidden></div>'+
-     '<p class="hint" style="margin:0">Dòng tiêu đề có thể có các cột “STT”, “Họ và tên”, “Lớp”, “Giới tính”. Khối được lấy từ chữ số đầu tiên trong cột Lớp (6/1, 7A2, 8.3…). Giới tính ghi “Nam” hoặc “Nữ”.</p>'+
-     '<div class="field">Thêm từng VĐV<div class="row"><label class="field">Họ tên<input id="oneName"></label><label class="field" style="max-width:90px;min-width:80px">Lớp<input id="oneCls" placeholder="VD: 6/1"></label><label class="field" style="max-width:90px;min-width:80px">Giới tính<select id="oneSex"><option>Nam</option><option>Nữ</option></select></label><button class="btn" data-act="addOne">Thêm</button></div></div></div></div>';
+     '<p class="hint" style="margin:0">Dòng tiêu đề có thể có các cột “STT”, “Họ và tên”, “Lớp”, “Giới tính”. Khối được lấy từ chữ số đầu tiên trong cột Lớp (2/1, 4A2, 6/1, 8.3…). Các bảng đang dùng: '+BRS.map(blabel).join('; ')+'. Giới tính ghi “Nam” hoặc “Nữ”.</p>'+
+     '<div class="field">Thêm từng VĐV<div class="row"><label class="field">Họ tên<input id="oneName"></label><label class="field" style="max-width:90px;min-width:80px">Lớp<input id="oneCls" placeholder="VD: '+lvl().eg+'"></label><label class="field" style="max-width:90px;min-width:80px">Giới tính<select id="oneSex"><option>Nam</option><option>Nữ</option></select></label><button class="btn" data-act="addOne">Thêm</button></div></div></div></div>';
   GKEYS.forEach(k=>{const ps=playersIn(k);if(!ps.length)return;const g=G(k),lock=started(k);
     const list=drawn(k)?[...ps].sort((a,b)=>(g.seed[a.id]||999)-(g.seed[b.id]||999)):[...ps].sort((a,b)=>a.cls.localeCompare(b.cls,'vi',{numeric:true})||a.name.localeCompare(b.name,'vi'));
     h+='<div class="gtitle"><h3>'+gname(k)+' <span class="sub">· '+ps.length+' VĐV</span></h3>'+(lock?'<span class="pill live">Đang thi đấu – khóa danh sách</span>':'')+'</div>';
@@ -739,11 +782,11 @@ document.addEventListener('click',e=>{
     case 'delP':{const p=P(b.dataset.id);if(p&&started(keyOf(p))){toast('Bảng đã bắt đầu thi đấu, không xóa được VĐV.');break}S.players=S.players.filter(q=>q.id!==b.dataset.id);save();render();break}
     case 'addPaste':{const t=document.getElementById('pasteBox').value;const list=parseRows(textToRows(t),document.getElementById('defSex').value);if(!list.length){toast('Chưa có dòng nào hợp lệ để thêm.');break}addPlayers(list);break}
     case 'addOne':{const n=document.getElementById('oneName').value.trim(),c=document.getElementById('oneCls').value.trim();if(!n||!c){const e=document.getElementById(n?'oneCls':'oneName');toast(n?'Chưa nhập lớp. Gõ lớp vào ô “Lớp”, ví dụ 6/1.':'Chưa nhập họ tên.');e.focus();break}
-      if(!gradeOf(c)){toast('Lớp phải có số khối 6, 7, 8 hoặc 9, ví dụ 6/1.');document.getElementById('oneCls').focus();break}addPlayers([{name:n.replace(/\s+/g,' '),cls:c,sex:document.getElementById('oneSex').value}]);break}
+      if(!gradeOf(c)){toast('Lớp phải thuộc '+lvl().short+', ví dụ '+lvl().eg+'. Muốn nhập khối khác, chọn lại ô “Cấp học” phía trên.',6000);document.getElementById('oneCls').focus();break}addPlayers([{name:n.replace(/\s+/g,' '),cls:c,sex:document.getElementById('oneSex').value}]);break}
     case 'xlsx':exportXlsx();break;
     case 'print':exportPrint();break;
     case 'backup':offer('Saoluu_Co_vua_HKPD.json',JSON.stringify(S,null,1));break;
-    case 'wipe':{const info=S.info;S=blank();S.info=info;ui={view:'players',gkey:'Nam-6',tab:'draw',ri:null};save();render();toast('Đã xóa toàn bộ dữ liệu.');break}
+    case 'wipe':{const info=S.info;S=blank();S.info=info;ui={view:'players',gkey:GKEYS[0],tab:'draw',ri:null};save();render();toast('Đã xóa toàn bộ dữ liệu.');break}
     case 'ovNext':ovNext();break;
     case 'ovAll':ovAll();break;
     case 'ovClose':ovClose();break;
@@ -767,11 +810,12 @@ document.addEventListener('change',async e=>{
     t.value='';
   }
   if(t.id==='restoreFile'&&t.files[0]){
-    try{const s=JSON.parse(await t.files[0].text());if(!s||s.v!==1||!Array.isArray(s.players))throw 0;S=s;save();render();toast('Đã khôi phục dữ liệu từ bản sao lưu.')}
+    try{const s=JSON.parse(await t.files[0].text());if(!s||s.v!==1||!Array.isArray(s.players))throw 0;if(!s.info||!LEVELS[s.info.level])(s.info=s.info||{}).level='THCS';S=s;setLevel(S.info.level);if(!GKEYS.includes(ui.gkey)){ui.gkey=GKEYS[0];ui.tab='draw';ui.ri=null}save();render();toast('Đã khôi phục dữ liệu từ bản sao lưu.')}
     catch(err){toast('Tệp này không phải bản sao lưu hợp lệ.')}
     t.value='';
   }
   if(t.id==='sTb'){S.info.tb=t.value;save();render()}
+  if(t.id==='sLevel'){if(!changeLevel(t.value))t.value=S.info.level||'THCS'}
   if(t.id==='sAvoid'){S.info.avoidClass=t.checked;save()}
   if(t.id==='sRounds'){let v=Math.round(+t.value||5);const maxPlayed=Math.max(0,...GKEYS.map(k=>G(k).rounds.length));v=Math.min(11,Math.max(1,maxPlayed,v));S.info.rounds=v;t.value=v;save();render()}
 });
